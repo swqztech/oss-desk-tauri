@@ -2143,11 +2143,7 @@ export default function App() {
       <DownloadPanel open={showDownloads} onClose={() => setShowDownloads(false)} />
 
       {showForm && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={() => setShowForm(false)}
-        >
+        <div className="modal-backdrop" role="presentation">
           <div
             className="modal-card form-modal"
             role="dialog"
