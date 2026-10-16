@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core'
+
 export type OssAccount = {
   id: string
   name: string
@@ -21,6 +23,47 @@ export type BrowseState = {
 const STORAGE_KEY = 'oss-desk:accounts'
 const ACTIVE_KEY = 'oss-desk:active-id'
 
+let diskSync = false
+
+type AccountsFile = {
+  accounts: OssAccount[]
+  activeId: string | null
+}
+
+/** 从 %APPDATA%/oss/accounts.json 导入（含 Electron LevelDB 一次性迁移） */
+export async function bootstrapAccounts(): Promise<void> {
+  const file = await invoke<AccountsFile>('accounts_load')
+  writeAccountsLocal(file.accounts)
+  writeActiveIdLocal(file.activeId)
+  diskSync = true
+}
+
+function persistAccounts() {
+  if (!diskSync) return
+  const payload: AccountsFile = {
+    accounts: readAccounts(),
+    activeId: readActiveId(),
+  }
+  void invoke('accounts_save', { file: payload }).catch(() => undefined)
+}
+
+function writeAccountsLocal(list: OssAccount[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  } catch {
+    // 忽略配额不足
+  }
+}
+
+function writeActiveIdLocal(id: string | null) {
+  try {
+    if (id) localStorage.setItem(ACTIVE_KEY, id)
+    else localStorage.removeItem(ACTIVE_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 export function readAccounts(): OssAccount[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -33,11 +76,8 @@ export function readAccounts(): OssAccount[] {
 }
 
 export function writeAccounts(list: OssAccount[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
-  } catch {
-    // 忽略配额不足
-  }
+  writeAccountsLocal(list)
+  persistAccounts()
 }
 
 export function sortAccounts(list: OssAccount[]): OssAccount[] {
@@ -59,12 +99,8 @@ export function readActiveId(): string | null {
 }
 
 export function writeActiveId(id: string | null) {
-  try {
-    if (id) localStorage.setItem(ACTIVE_KEY, id)
-    else localStorage.removeItem(ACTIVE_KEY)
-  } catch {
-    // ignore
-  }
+  writeActiveIdLocal(id)
+  persistAccounts()
 }
 
 export function upsertAccount(account: OssAccount): OssAccount[] {

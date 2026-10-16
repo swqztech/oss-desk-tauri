@@ -1,3 +1,4 @@
+mod accounts;
 mod download;
 mod sidecar;
 
@@ -12,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            accounts::ensure_migrated();
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
             }
@@ -24,6 +26,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            accounts::accounts_load,
+            accounts::accounts_save,
             download_list,
             download_clear,
             download_remove,
