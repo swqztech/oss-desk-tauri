@@ -1,0 +1,32 @@
+{
+  "name": "oss-desk-tauri",
+  "version": "1.0.0",
+  "description": "Aliyun OSS desktop client (Tauri + React)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:serve": "vite",
+    "build": "tsc -b && vite build",
+    "build:api": "cd oss-server && npm install && npm run build && node ../scripts/prepare-oss-runtime.mjs",
+    "build:client": "npm run build:api && npm run build && npm run tauri build",
+    "tauri": "tauri",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
+    "@tauri-apps/plugin-opener": "^2.2.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.6"
+  }
+}

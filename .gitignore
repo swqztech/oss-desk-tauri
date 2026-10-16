@@ -1,0 +1,11 @@
+node_modules/
+dist/
+oss-server/node_modules/
+oss-server/dist/
+src-tauri/target/
+src-tauri/resources/oss-api/node.exe
+src-tauri/resources/oss-api/server.cjs
+src-tauri/resources/oss-api/*.zip
+src-tauri/resources/oss-api/_extract/
+*.log
+tsconfig.tsbuildinfo

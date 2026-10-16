@@ -1,0 +1,17 @@
+{
+  "name": "oss-api-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild run.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs"
+  },
+  "dependencies": {
+    "ali-oss": "^6.23.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "proxy-agent": "^6.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
