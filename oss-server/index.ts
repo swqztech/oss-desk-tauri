@@ -175,12 +175,29 @@ async function withBucketClient<T>(
 }
 
 function errMessage(err: unknown) {
+  let msg = ''
   if (err && typeof err === 'object') {
     const e = err as { message?: string; code?: string; status?: number }
-    if (e.message) return e.message
-    if (e.code) return String(e.code)
+    if (e.message) msg = e.message
+    else if (e.code) msg = String(e.code)
+  } else {
+    msg = err instanceof Error ? err.message : String(err)
   }
-  return err instanceof Error ? err.message : String(err)
+  const lower = msg.toLowerCase()
+  if (
+    lower.includes('403 forbidden') ||
+    lower.includes("don't have permission to access the url") ||
+    (lower.includes('<html') && lower.includes('forbidden'))
+  ) {
+    return '访问被拒绝（403）。列举 Bucket 请使用官方地域域名；自定义 Endpoint 仅用于访问桶内对象。请检查 AccessKey 权限与地域。'
+  }
+  if (lower.includes('unexpected close tag') && lower.includes('<!doctype')) {
+    return 'OSS 返回了网页而非 API 数据，多为自定义 Endpoint 或域名配置不当。已改用地域域名列举 Bucket，请重试；若仍失败请检查密钥与地域。'
+  }
+  if (msg.length > 280) {
+    return `${msg.slice(0, 280)}…`
+  }
+  return msg || '未知错误'
 }
 
 function unwrapPrefix(value: unknown): string {
@@ -381,9 +398,10 @@ app.post('/api/connect', async (req, res) => {
 
     for (const authorizationV4 of [true, false]) {
       try {
+        // 列举 Bucket 必须走 oss-cn-xxx.aliyuncs.com，自定义 CDN/CNAME 不支持 ListBuckets
         const client = createClient(creds, {
           authorizationV4,
-          useCustomEndpoint: Boolean(creds.endpoint),
+          useCustomEndpoint: false,
         })
         result = await client.listBuckets({ 'max-keys': 1000 })
         break
