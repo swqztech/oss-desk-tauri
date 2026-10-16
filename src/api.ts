@@ -1,5 +1,22 @@
-const API_BASE =
+export const API_BASE =
   (import.meta.env.VITE_OSS_API as string | undefined) || 'http://127.0.0.1:3088'
+
+/** 等待本地 OSS API 就绪（侧车启动后再连接账号） */
+export async function waitForApiReady(maxMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + maxMs
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`, {
+        signal: AbortSignal.timeout(2_000),
+      })
+      if (res.ok) return true
+    } catch {
+      // retry
+    }
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  return false
+}
 
 export type CredsPayload = {
   accessKeyId: string
@@ -37,7 +54,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
   })
   const data = (await res.json()) as T & { ok?: boolean; error?: string }
   if (!res.ok || (data && 'ok' in data && data.ok === false)) {

@@ -13,6 +13,7 @@ import {
 } from './accounts'
 import {
   connect,
+  waitForApiReady,
   deleteObject,
   deleteObjectsBatch,
   getBucketStat,
@@ -176,6 +177,9 @@ export default function App() {
   const [showForm, setShowForm] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [apiReady, setApiReady] = useState(false)
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
   const [buckets, setBuckets] = useState<BucketInfo[]>([])
   const [bucketStats, setBucketStats] = useState<
     Record<
@@ -739,6 +743,14 @@ export default function App() {
         setItems([])
       }
       try {
+        setConnectError(null)
+        if (!apiReady) {
+          const ok = await waitForApiReady()
+          setApiReady(ok)
+          if (!ok) {
+            throw new Error('本地 OSS 服务未就绪，请稍后重试或重启应用')
+          }
+        }
         const res = await connect(toCreds(acct))
         setBuckets(res.buckets)
         setConnected(true)
@@ -765,17 +777,33 @@ export default function App() {
         // 异步拉容量，不阻塞进入浏览
         void loadBucketStats(acct, res.buckets)
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        setConnectError(msg)
         toast.error(err)
       } finally {
         setConnecting(false)
       }
     },
-    [loadObjects, loadBucketStats],
+    [apiReady, loadObjects, loadBucketStats],
   )
+
+  useEffect(() => {
+    let alive = true
+    void waitForApiReady(45_000).then((ok) => {
+      if (!alive) return
+      setApiReady(ok)
+      if (!ok) {
+        setApiError('本地 OSS 接口未启动，请点击左侧账号重试或重新安装应用。')
+      }
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // 首次启动：从 URL hash 恢复目录位置
   useEffect(() => {
-    if (booted.current) return
+    if (!apiReady || booted.current) return
     booted.current = true
 
     const browse = readBrowseHash()
@@ -795,7 +823,7 @@ export default function App() {
           }
         : undefined,
     })
-  }, [doConnect])
+  }, [apiReady, doConnect])
 
   // 浏览位置写入 URL，刷新可还原
   useEffect(() => {
@@ -1239,7 +1267,7 @@ export default function App() {
           {accounts.map((acct) => (
             <div
               key={acct.id}
-              className={`account-item ${activeId === acct.id ? 'active' : ''} ${acct.pinned ? 'pinned' : ''}`}
+              className={`account-item ${activeId === acct.id && connected ? 'active' : ''} ${acct.pinned ? 'pinned' : ''}`}
             >
               <button
                 className="account-main"
@@ -1319,6 +1347,14 @@ export default function App() {
             <p>
               使用 AccessKey 登录，可为每个账号自定义名称并置顶，方便区分多个账号。
             </p>
+            {!apiReady && !apiError && (
+              <p className="welcome-hint">正在启动本地服务…</p>
+            )}
+            {apiError && <p className="welcome-error">{apiError}</p>}
+            {connectError && <p className="welcome-error">{connectError}</p>}
+            {accounts.length > 0 && apiReady && (
+              <p className="welcome-hint">点击左侧账号名称即可连接并浏览 Bucket。</p>
+            )}
             <button className="btn-primary" type="button" onClick={startAdd}>
               添加账号并登录
             </button>

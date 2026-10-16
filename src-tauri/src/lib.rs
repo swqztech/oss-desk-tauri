@@ -14,15 +14,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             accounts::ensure_migrated();
+            let handle = app.handle().clone();
+            if let Err(e) = sidecar::spawn_oss_api(&handle) {
+                eprintln!("[oss-desk] {}", e);
+            }
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
             }
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                if let Err(e) = sidecar::spawn_oss_api(&handle) {
-                    eprintln!("[oss-desk] {}", e);
-                }
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

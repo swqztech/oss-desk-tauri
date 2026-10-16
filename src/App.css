@@ -326,6 +326,16 @@ button:disabled {
   font-size: 0.92rem;
 }
 
+.welcome-hint {
+  color: var(--accent) !important;
+  font-size: 0.88rem !important;
+}
+
+.welcome-error {
+  color: var(--danger) !important;
+  font-weight: 500;
+}
+
 .panel {
   background: var(--paper-raised);
   border: 1px solid var(--line);
