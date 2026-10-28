@@ -15,6 +15,7 @@ import {
   connect,
   waitForApiReady,
   deleteObject,
+  deleteObjectsBatch,
   getBucketStat,
   getFolderStat,
   listObjects,
@@ -229,8 +230,7 @@ export default function App() {
   const [deleteProgress, setDeleteProgress] = useState<{
     done: number
     total: number
-    name: string
-    key: string
+    active: { key: string; name: string }[]
   } | null>(null)
   const [folderStats, setFolderStats] = useState<
     Record<
@@ -1197,57 +1197,121 @@ export default function App() {
     })
     if (!ok) return
 
-    const ordered = [...itemsToDelete].sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
-      return a.key.localeCompare(b.key)
-    })
+    const displayName = (item: { key: string; type: 'file' | 'folder' }) => {
+      const baseName = item.key.split('/').filter(Boolean).pop() || item.key
+      return item.type === 'folder' ? `${baseName}/` : baseName
+    }
+    const files = itemsToDelete
+      .filter((item) => item.type === 'file')
+      .sort((a, b) => a.key.localeCompare(b.key))
+    const folders = itemsToDelete
+      .filter((item) => item.type === 'folder')
+      .sort((a, b) => a.key.localeCompare(b.key))
+    const fileChunks: { key: string; type: 'file' | 'folder' }[][] = []
+    for (let i = 0; i < files.length; i += 25) {
+      fileChunks.push(files.slice(i, i + 25))
+    }
 
     setBatchDeleting(true)
     let deletedObjects = 0
     let failed = 0
-    try {
-      for (let i = 0; i < ordered.length; i++) {
-        const item = ordered[i]
-        const baseName = item.key.split('/').filter(Boolean).pop() || item.key
-        const name = item.type === 'folder' ? `${baseName}/` : baseName
-        setDeleteProgress({
-          done: i,
-          total: ordered.length,
-          name,
-          key: item.key,
-        })
-        try {
-          const res = await deleteObject(toCreds(active), {
-            bucket,
-            bucketRegion: bucketRegion || undefined,
-            key: item.key,
-            type: item.type,
-          })
-          deletedObjects += res.deleted
-          setSelected((prev) => {
-            if (!prev.has(item.key)) return prev
-            const next = new Map(prev)
-            next.delete(item.key)
-            return next
-          })
-          if (searchMode) {
-            setSearchHits((prev) => prev.filter((h) => h.key !== item.key))
-          } else {
-            setItems((prev) => prev.filter((row) => row.key !== item.key))
-          }
-        } catch (err) {
-          failed += 1
-          toast.error(
-            `${name}：${err instanceof Error ? err.message : String(err)}`,
-          )
+    let done = 0
+    const inflight = new Map<string, string>()
+    const publish = () => {
+      setDeleteProgress({
+        done,
+        total: itemsToDelete.length,
+        active: [...inflight.entries()].map(([key, name]) => ({ key, name })),
+      })
+    }
+    const dropRows = (keys: string[]) => {
+      const keySet = new Set(keys)
+      setSelected((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const key of keys) {
+          if (next.delete(key)) changed = true
         }
-        setDeleteProgress({
-          done: i + 1,
-          total: ordered.length,
-          name,
-          key: item.key,
-        })
+        return changed ? next : prev
+      })
+      if (searchMode) {
+        setSearchHits((prev) => prev.filter((h) => !keySet.has(h.key)))
+      } else {
+        setItems((prev) => prev.filter((row) => !keySet.has(row.key)))
       }
+    }
+    const finishItems = (items: { key: string; name: string }[]) => {
+      for (const item of items) inflight.delete(item.key)
+      done += items.length
+      publish()
+    }
+
+    try {
+      publish()
+      const fileParallel = Math.min(4, fileChunks.length)
+      let fileCursor = 0
+      await Promise.all(
+        Array.from({ length: fileParallel }, async () => {
+          while (fileCursor < fileChunks.length) {
+            const chunk = fileChunks[fileCursor++]
+            const named = chunk.map((item) => ({
+              key: item.key,
+              name: displayName(item),
+            }))
+            for (const item of named) inflight.set(item.key, item.name)
+            publish()
+            try {
+              const res = await deleteObjectsBatch(toCreds(active), {
+                bucket,
+                bucketRegion: bucketRegion || undefined,
+                items: chunk,
+              })
+              deletedObjects += res.deleted
+              failed += res.failed
+              for (const errItem of res.errors || []) {
+                toast.error(`${displayName({ key: errItem.key, type: 'file' })}：${errItem.error}`)
+              }
+              const failedKeys = new Set((res.errors || []).map((errItem) => errItem.key))
+              dropRows(chunk.filter((item) => !failedKeys.has(item.key)).map((item) => item.key))
+            } catch (err) {
+              failed += chunk.length
+              toast.error(err instanceof Error ? err.message : String(err))
+            } finally {
+              finishItems(named)
+            }
+          }
+        }),
+      )
+
+      const folderParallel = Math.min(4, folders.length)
+      let folderCursor = 0
+      await Promise.all(
+        Array.from({ length: folderParallel }, async () => {
+          while (folderCursor < folders.length) {
+            const item = folders[folderCursor++]
+            const name = displayName(item)
+            inflight.set(item.key, name)
+            publish()
+            try {
+              const res = await deleteObject(toCreds(active), {
+                bucket,
+                bucketRegion: bucketRegion || undefined,
+                key: item.key,
+                type: item.type,
+              })
+              deletedObjects += res.deleted
+              dropRows([item.key])
+            } catch (err) {
+              failed += 1
+              toast.error(
+                `${name}：${err instanceof Error ? err.message : String(err)}`,
+              )
+            } finally {
+              finishItems([{ key: item.key, name }])
+            }
+          }
+        }),
+      )
       if (!searchMode && folderCount > 0) {
         void loadObjects(active, bucket, prefix, bucketRegion, {
           page: listPage,
@@ -1261,7 +1325,7 @@ export default function App() {
         )
       } else {
         toast.success(
-          `批量删除完成：${ordered.length} 项，共删除 ${deletedObjects} 个对象`,
+          `批量删除完成：${itemsToDelete.length} 项，共删除 ${deletedObjects} 个对象`,
         )
       }
     } finally {
@@ -1604,14 +1668,20 @@ export default function App() {
                       <div className="batch-progress-meta">
                         <span>
                           {deleteProgress.done < deleteProgress.total
-                            ? `正在删除 ${deleteProgress.done + 1}/${deleteProgress.total}`
+                            ? `正在删除 ${deleteProgress.done}/${deleteProgress.total} · 同时 ${deleteProgress.active.length} 个`
                             : `已完成 ${deleteProgress.done}/${deleteProgress.total}`}
                         </span>
                         <span
                           className="batch-progress-name"
-                          title={deleteProgress.key}
+                          title={deleteProgress.active.map((item) => item.name).join('\n')}
                         >
-                          {deleteProgress.name}
+                          {deleteProgress.active
+                            .slice(0, 3)
+                            .map((item) => item.name)
+                            .join('、')}
+                          {deleteProgress.active.length > 3
+                            ? ` 等 ${deleteProgress.active.length} 个`
+                            : ''}
                         </span>
                       </div>
                       <div className="batch-progress-track">
@@ -1650,7 +1720,7 @@ export default function App() {
                     {searchHits.map((hit) => (
                       <div
                         key={hit.key}
-                        className={`gallery-card${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.key === hit.key ? ' is-deleting' : ''}`}
+                        className={`gallery-card${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.active.some((item) => item.key === hit.key) ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1746,7 +1816,7 @@ export default function App() {
                     {folders.map((item) => (
                       <div
                         key={item.key}
-                        className={`gallery-card gallery-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
+                        className={`gallery-card gallery-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.active.some((row) => row.key === item.key) ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1796,7 +1866,7 @@ export default function App() {
                     {files.map((item) => (
                       <div
                         key={item.key}
-                        className={`gallery-card${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
+                        className={`gallery-card${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.active.some((row) => row.key === item.key) ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1891,7 +1961,7 @@ export default function App() {
                       {searchHits.map((hit) => (
                         <tr
                           key={hit.key}
-                          className={`row-file${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.key === hit.key ? ' is-deleting' : ''}`}
+                          className={`row-file${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.active.some((item) => item.key === hit.key) ? ' is-deleting' : ''}`}
                         >
                           <td className="col-check">
                             <input
@@ -2002,7 +2072,7 @@ export default function App() {
                       {folders.map((item) => (
                         <tr
                           key={item.key}
-                          className={`row-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
+                          className={`row-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.active.some((row) => row.key === item.key) ? ' is-deleting' : ''}`}
                           onDoubleClick={() => openFolder(item.key)}
                         >
                           <td className="col-check">
@@ -2042,7 +2112,7 @@ export default function App() {
                       {files.map((item) => (
                         <tr
                           key={item.key}
-                          className={`row-file${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
+                          className={`row-file${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.active.some((row) => row.key === item.key) ? ' is-deleting' : ''}`}
                         >
                           <td className="col-check">
                             <input

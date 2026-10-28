@@ -808,13 +808,40 @@ app.post('/api/delete-batch', async (req, res) => {
       async (client, meta) => {
         let deleted = 0
         const errors: { key: string; error: string }[] = []
-        for (const target of list) {
+        const files = list.filter((t) => t.type === 'file')
+        const folders = list.filter((t) => t.type === 'folder')
+
+        for (let i = 0; i < files.length; i += 1000) {
+          const chunk = files.slice(i, i + 1000)
           try {
-            deleted += await deleteOne(client, target)
+            await client.deleteMulti(
+              chunk.map((t) => t.key),
+              { quiet: true },
+            )
+            deleted += chunk.length
           } catch (err) {
-            errors.push({ key: target.key, error: errMessage(err) })
+            const message = errMessage(err)
+            for (const target of chunk) {
+              errors.push({ key: target.key, error: message })
+            }
           }
         }
+
+        const folderLimit = Math.min(4, folders.length)
+        let folderCursor = 0
+        await Promise.all(
+          Array.from({ length: folderLimit }, async () => {
+            while (folderCursor < folders.length) {
+              const target = folders[folderCursor++]
+              try {
+                deleted += await deleteOne(client, target)
+              } catch (err) {
+                errors.push({ key: target.key, error: errMessage(err) })
+              }
+            }
+          }),
+        )
+
         return {
           deleted,
           requested: list.length,
