@@ -284,7 +284,7 @@ export default function App() {
   )
 
   const withFolderStatSlot = async <T,>(fn: () => Promise<T>): Promise<T> => {
-    while (folderStatSlots.current >= 2) {
+    while (folderStatSlots.current >= 6) {
       await new Promise<void>((resolve) => {
         folderStatWaiters.current.push(resolve)
       })
@@ -1108,6 +1108,17 @@ export default function App() {
 
   const folders = items.filter((i) => i.type === 'folder')
   const files = items.filter((i) => i.type === 'file')
+  const folderKeyList = useMemo(
+    () => (searchMode ? [] : folders.map((folder) => folder.key)),
+    [searchMode, items],
+  )
+
+  useEffect(() => {
+    if (!active || !bucket) return
+    for (const key of folderKeyList) {
+      void loadFolderStat(key)
+    }
+  }, [active, bucket, folderKeyList, loadFolderStat])
 
   const folderStatOf = (folderKey: string) =>
     folderStats[`${bucket}::${folderKey}`]
