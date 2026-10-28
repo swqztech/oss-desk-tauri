@@ -15,7 +15,6 @@ import {
   connect,
   waitForApiReady,
   deleteObject,
-  deleteObjectsBatch,
   getBucketStat,
   getFolderStat,
   listObjects,
@@ -249,6 +248,8 @@ export default function App() {
   const folderStatSlots = useRef(0)
   const folderStatWaiters = useRef<Array<() => void>>([])
   const folderStatInflight = useRef(new Set<string>())
+  const folderStatAbortRef = useRef(new AbortController())
+  const batchDeletingRef = useRef(false)
   const folderStatsRef = useRef(folderStats)
   folderStatsRef.current = folderStats
 
@@ -284,7 +285,7 @@ export default function App() {
   )
 
   const withFolderStatSlot = async <T,>(fn: () => Promise<T>): Promise<T> => {
-    while (folderStatSlots.current >= 6) {
+    while (folderStatSlots.current >= 3) {
       await new Promise<void>((resolve) => {
         folderStatWaiters.current.push(resolve)
       })
@@ -307,16 +308,23 @@ export default function App() {
         if (cur?.status === 'ok' || cur?.status === 'loading') return
       }
       if (folderStatInflight.current.has(cacheKey)) return
+      if (batchDeletingRef.current) return
+      const signal = folderStatAbortRef.current.signal
       folderStatInflight.current.add(cacheKey)
       setFolderStats((prev) => ({ ...prev, [cacheKey]: { status: 'loading' } }))
       try {
         const res = await withFolderStatSlot(() =>
-          getFolderStat(toCreds(active), {
-            bucket,
-            bucketRegion: bucketRegion || undefined,
-            prefix: folderKey,
-          }),
+          getFolderStat(
+            toCreds(active),
+            {
+              bucket,
+              bucketRegion: bucketRegion || undefined,
+              prefix: folderKey,
+            },
+            signal,
+          ),
         )
+        if (signal.aborted) return
         setFolderStats((prev) => ({
           ...prev,
           [cacheKey]: {
@@ -328,6 +336,18 @@ export default function App() {
           },
         }))
       } catch (err) {
+        const aborted =
+          signal.aborted ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        if (aborted) {
+          setFolderStats((prev) => {
+            if (prev[cacheKey]?.status !== 'loading') return prev
+            const next = { ...prev }
+            delete next[cacheKey]
+            return next
+          })
+          return
+        }
         setFolderStats((prev) => ({
           ...prev,
           [cacheKey]: {
@@ -1114,7 +1134,7 @@ export default function App() {
   )
 
   useEffect(() => {
-    if (!active || !bucket) return
+    if (!active || !bucket || batchDeletingRef.current) return
     for (const key of folderKeyList) {
       void loadFolderStat(key)
     }
@@ -1218,11 +1238,11 @@ export default function App() {
     const folders = itemsToDelete
       .filter((item) => item.type === 'folder')
       .sort((a, b) => a.key.localeCompare(b.key))
-    const fileChunks: { key: string; type: 'file' | 'folder' }[][] = []
-    for (let i = 0; i < files.length; i += 25) {
-      fileChunks.push(files.slice(i, i + 25))
-    }
+    const ordered = [...folders, ...files]
 
+    folderStatAbortRef.current.abort()
+    folderStatAbortRef.current = new AbortController()
+    batchDeletingRef.current = true
     setBatchDeleting(true)
     let deletedObjects = 0
     let failed = 0
@@ -1259,47 +1279,12 @@ export default function App() {
 
     try {
       publish()
-      const fileParallel = Math.min(4, fileChunks.length)
-      let fileCursor = 0
+      const parallel = Math.min(6, ordered.length)
+      let cursor = 0
       await Promise.all(
-        Array.from({ length: fileParallel }, async () => {
-          while (fileCursor < fileChunks.length) {
-            const chunk = fileChunks[fileCursor++]
-            const named = chunk.map((item) => ({
-              key: item.key,
-              name: displayName(item),
-            }))
-            for (const item of named) inflight.set(item.key, item.name)
-            publish()
-            try {
-              const res = await deleteObjectsBatch(toCreds(active), {
-                bucket,
-                bucketRegion: bucketRegion || undefined,
-                items: chunk,
-              })
-              deletedObjects += res.deleted
-              failed += res.failed
-              for (const errItem of res.errors || []) {
-                toast.error(`${displayName({ key: errItem.key, type: 'file' })}：${errItem.error}`)
-              }
-              const failedKeys = new Set((res.errors || []).map((errItem) => errItem.key))
-              dropRows(chunk.filter((item) => !failedKeys.has(item.key)).map((item) => item.key))
-            } catch (err) {
-              failed += chunk.length
-              toast.error(err instanceof Error ? err.message : String(err))
-            } finally {
-              finishItems(named)
-            }
-          }
-        }),
-      )
-
-      const folderParallel = Math.min(4, folders.length)
-      let folderCursor = 0
-      await Promise.all(
-        Array.from({ length: folderParallel }, async () => {
-          while (folderCursor < folders.length) {
-            const item = folders[folderCursor++]
+        Array.from({ length: parallel }, async () => {
+          while (cursor < ordered.length) {
+            const item = ordered[cursor++]
             const name = displayName(item)
             inflight.set(item.key, name)
             publish()
@@ -1340,6 +1325,7 @@ export default function App() {
         )
       }
     } finally {
+      batchDeletingRef.current = false
       setBatchDeleting(false)
       setDeleteProgress(null)
     }
@@ -1679,7 +1665,7 @@ export default function App() {
                       <div className="batch-progress-meta">
                         <span>
                           {deleteProgress.done < deleteProgress.total
-                            ? `正在删除 ${deleteProgress.done}/${deleteProgress.total} · 同时 ${deleteProgress.active.length} 个`
+                            ? `已完成 ${deleteProgress.done}/${deleteProgress.total} · 同时 ${deleteProgress.active.length} 个`
                             : `已完成 ${deleteProgress.done}/${deleteProgress.total}`}
                         </span>
                         <span

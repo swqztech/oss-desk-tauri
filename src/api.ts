@@ -50,12 +50,17 @@ export type FileItem = {
 
 export type ObjectItem = FolderItem | FileItem
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const timeout = AbortSignal.timeout(120_000)
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
   })
   const data = (await res.json()) as T & { ok?: boolean; error?: string }
   if (!res.ok || (data && 'ok' in data && data.ok === false)) {
@@ -104,9 +109,10 @@ export type FolderStatInfo = {
 
 export async function getFolderStat(
   creds: CredsPayload,
-  opts: { bucket: string; bucketRegion?: string; prefix: string }
+  opts: { bucket: string; bucketRegion?: string; prefix: string },
+  signal?: AbortSignal,
 ) {
-  return post<FolderStatInfo>('/api/folder-stat', { ...creds, ...opts })
+  return post<FolderStatInfo>('/api/folder-stat', { ...creds, ...opts }, signal)
 }
 
 export type SearchHit = FileItem & {
