@@ -733,6 +733,52 @@ button.gallery-card:hover,
   padding-top: 0.15rem;
 }
 
+.batch-progress {
+  flex: 1 1 240px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.batch-progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.batch-progress-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.batch-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.batch-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--danger);
+  transition: width 0.18s ease;
+}
+
+tr.is-deleting,
+.gallery-card.is-deleting {
+  outline: 2px solid var(--danger);
+  background: var(--danger-soft);
+}
+
 .batch-check {
   display: inline-flex;
   align-items: center;

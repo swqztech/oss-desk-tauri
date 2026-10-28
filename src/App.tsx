@@ -15,7 +15,6 @@ import {
   connect,
   waitForApiReady,
   deleteObject,
-  deleteObjectsBatch,
   getBucketStat,
   getFolderStat,
   listObjects,
@@ -227,6 +226,12 @@ export default function App() {
     () => new Map(),
   )
   const [batchDeleting, setBatchDeleting] = useState(false)
+  const [deleteProgress, setDeleteProgress] = useState<{
+    done: number
+    total: number
+    name: string
+    key: string
+  } | null>(null)
   const [folderStats, setFolderStats] = useState<
     Record<
       string,
@@ -1192,40 +1197,76 @@ export default function App() {
     })
     if (!ok) return
 
+    const ordered = [...itemsToDelete].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+      return a.key.localeCompare(b.key)
+    })
+
     setBatchDeleting(true)
+    let deletedObjects = 0
+    let failed = 0
     try {
-      const res = await deleteObjectsBatch(toCreds(active), {
-        bucket,
-        bucketRegion: bucketRegion || undefined,
-        items: itemsToDelete,
-      })
-      const keys = new Set(itemsToDelete.map((i) => i.key))
-      if (searchMode) {
-        setSearchHits((prev) => prev.filter((h) => !keys.has(h.key)))
-      } else {
-        setItems((prev) => prev.filter((i) => !keys.has(i.key)))
-        if (folderCount > 0) {
-          void loadObjects(active, bucket, prefix, bucketRegion, {
-            page: listPage,
-            marker: pageMarkers[listPage - 1],
+      for (let i = 0; i < ordered.length; i++) {
+        const item = ordered[i]
+        const baseName = item.key.split('/').filter(Boolean).pop() || item.key
+        const name = item.type === 'folder' ? `${baseName}/` : baseName
+        setDeleteProgress({
+          done: i,
+          total: ordered.length,
+          name,
+          key: item.key,
+        })
+        try {
+          const res = await deleteObject(toCreds(active), {
+            bucket,
+            bucketRegion: bucketRegion || undefined,
+            key: item.key,
+            type: item.type,
           })
+          deletedObjects += res.deleted
+          setSelected((prev) => {
+            if (!prev.has(item.key)) return prev
+            const next = new Map(prev)
+            next.delete(item.key)
+            return next
+          })
+          if (searchMode) {
+            setSearchHits((prev) => prev.filter((h) => h.key !== item.key))
+          } else {
+            setItems((prev) => prev.filter((row) => row.key !== item.key))
+          }
+        } catch (err) {
+          failed += 1
+          toast.error(
+            `${name}：${err instanceof Error ? err.message : String(err)}`,
+          )
         }
+        setDeleteProgress({
+          done: i + 1,
+          total: ordered.length,
+          name,
+          key: item.key,
+        })
       }
-      clearSelection()
+      if (!searchMode && folderCount > 0) {
+        void loadObjects(active, bucket, prefix, bucketRegion, {
+          page: listPage,
+          marker: pageMarkers[listPage - 1],
+        })
+      }
       setGalleryIndex(null)
-      if (res.failed > 0) {
+      if (failed > 0) {
         toast.warning(
-          `已删除 ${res.deleted} 个对象，${res.failed} 项失败`,
+          `已删除 ${deletedObjects} 个对象，${failed} 项失败`,
         )
       } else {
         toast.success(
-          `批量删除完成：请求 ${res.requested} 项，共删除 ${res.deleted} 个对象`,
+          `批量删除完成：${ordered.length} 项，共删除 ${deletedObjects} 个对象`,
         )
       }
-    } catch (err) {
-      toast.error(err)
     } finally {
       setBatchDeleting(false)
+      setDeleteProgress(null)
     }
   }
 
@@ -1558,6 +1599,36 @@ export default function App() {
                   >
                     {batchDeleting ? '删除中…' : '批量删除'}
                   </button>
+                  {deleteProgress && (
+                    <div className="batch-progress" role="status">
+                      <div className="batch-progress-meta">
+                        <span>
+                          {deleteProgress.done < deleteProgress.total
+                            ? `正在删除 ${deleteProgress.done + 1}/${deleteProgress.total}`
+                            : `已完成 ${deleteProgress.done}/${deleteProgress.total}`}
+                        </span>
+                        <span
+                          className="batch-progress-name"
+                          title={deleteProgress.key}
+                        >
+                          {deleteProgress.name}
+                        </span>
+                      </div>
+                      <div className="batch-progress-track">
+                        <div
+                          className="batch-progress-fill"
+                          style={{
+                            width: `${
+                              deleteProgress.total
+                                ? (deleteProgress.done / deleteProgress.total) *
+                                  100
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {selected.size > 0 && (
                     <button
                       className="btn-light"
@@ -1579,7 +1650,7 @@ export default function App() {
                     {searchHits.map((hit) => (
                       <div
                         key={hit.key}
-                        className={`gallery-card${selected.has(hit.key) ? ' is-selected' : ''}`}
+                        className={`gallery-card${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.key === hit.key ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1675,7 +1746,7 @@ export default function App() {
                     {folders.map((item) => (
                       <div
                         key={item.key}
-                        className={`gallery-card gallery-folder${selected.has(item.key) ? ' is-selected' : ''}`}
+                        className={`gallery-card gallery-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1725,7 +1796,7 @@ export default function App() {
                     {files.map((item) => (
                       <div
                         key={item.key}
-                        className={`gallery-card${selected.has(item.key) ? ' is-selected' : ''}`}
+                        className={`gallery-card${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
                       >
                         <label className="card-check">
                           <input
@@ -1820,7 +1891,7 @@ export default function App() {
                       {searchHits.map((hit) => (
                         <tr
                           key={hit.key}
-                          className={`row-file${selected.has(hit.key) ? ' is-selected' : ''}`}
+                          className={`row-file${selected.has(hit.key) ? ' is-selected' : ''}${deleteProgress?.key === hit.key ? ' is-deleting' : ''}`}
                         >
                           <td className="col-check">
                             <input
@@ -1931,7 +2002,7 @@ export default function App() {
                       {folders.map((item) => (
                         <tr
                           key={item.key}
-                          className={`row-folder${selected.has(item.key) ? ' is-selected' : ''}`}
+                          className={`row-folder${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
                           onDoubleClick={() => openFolder(item.key)}
                         >
                           <td className="col-check">
@@ -1971,7 +2042,7 @@ export default function App() {
                       {files.map((item) => (
                         <tr
                           key={item.key}
-                          className={`row-file${selected.has(item.key) ? ' is-selected' : ''}`}
+                          className={`row-file${selected.has(item.key) ? ' is-selected' : ''}${deleteProgress?.key === item.key ? ' is-deleting' : ''}`}
                         >
                           <td className="col-check">
                             <input

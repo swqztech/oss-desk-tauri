@@ -10,6 +10,8 @@
     "build": "tsc -b && vite build",
     "build:api": "cd oss-server && npm install && npm run build && node ../scripts/prepare-oss-runtime.mjs",
     "build:client": "npm run build:api && npm run build && npm run tauri build",
+    "pack:portable": "node ../scripts/pack-tauri-portable.mjs . oss-api",
+    "pack:portable:build": "npm run build:client && npm run pack:portable",
     "tauri": "tauri",
     "typecheck": "tsc -b --pretty false"
   },
